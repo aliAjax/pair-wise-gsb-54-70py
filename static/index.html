@@ -8,8 +8,12 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
     main { max-width: 960px; margin: auto; }
     button { padding: .55rem .9rem; cursor: pointer; }
+    input { padding: .45rem .6rem; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    table { border-collapse: collapse; margin-top: 1rem; width: 100%; }
+    th, td { border: 1px solid #d4dbe3; padding: .45rem .7rem; text-align: left; }
+    th { background: #eef2f6; }
+    .row { display: flex; gap: 1rem; align-items: center; margin: .5rem 0; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -18,6 +22,24 @@
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
   <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
+
+  <h2>备缆仓库台账</h2>
+  <div class="row">
+    <input id="wh-name" placeholder="新仓库名称">
+    <button id="add-wh">注册仓库</button>
+  </div>
+  <div class="row">
+    <input id="st-wh" placeholder="仓库ID" size="6">
+    <input id="st-cable" placeholder="光缆" value="SEA-1">
+    <input id="st-seg" placeholder="区段" value="S3">
+    <input id="st-km" placeholder="可用长度km" size="10">
+    <button id="add-st">登记备缆</button>
+    <button id="load-wh">刷新仓库余量</button>
+  </div>
+  <table id="wh">
+    <thead><tr><th>仓库</th><th>光缆</th><th>区段</th><th>总长度(km)</th><th>已预占(km)</th><th>剩余可用(km)</th></tr></thead>
+    <tbody></tbody>
+  </table>
 </main>
 <script>
 const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
@@ -26,8 +48,59 @@ async function show(path) {
   const data = await response.json();
   document.getElementById("output").textContent = JSON.stringify(data, null, 2);
 }
+async function post(path, payload) {
+  const response = await fetch(path, {method: "POST", headers: Object.assign({"Content-Type": "application/json"}, headers), body: JSON.stringify(payload)});
+  const data = await response.json();
+  if (!response.ok) {
+    document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+    return null;
+  }
+  return data;
+}
+function cell(row, text) {
+  const td = row.insertCell();
+  td.textContent = text;
+}
+async function loadWarehouses() {
+  const response = await fetch("/api/warehouses", {headers});
+  const data = await response.json();
+  const tbody = document.querySelector("#wh tbody");
+  tbody.innerHTML = "";
+  for (const warehouse of data.items || []) {
+    if (!warehouse.stock.length) {
+      const row = tbody.insertRow();
+      cell(row, warehouse.name + " (#" + warehouse.id + ")");
+      cell(row, "（无台账）");
+      for (let i = 0; i < 4; i++) cell(row, "");
+      continue;
+    }
+    for (const stock of warehouse.stock) {
+      const row = tbody.insertRow();
+      cell(row, warehouse.name + " (#" + warehouse.id + ")");
+      cell(row, stock.cable);
+      cell(row, stock.segment);
+      cell(row, stock.total_km);
+      cell(row, stock.held_km);
+      cell(row, stock.available_km);
+    }
+  }
+}
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("load-wh").onclick = loadWarehouses;
+document.getElementById("add-wh").onclick = async () => {
+  const name = document.getElementById("wh-name").value.trim();
+  if (!name) return;
+  if (await post("/api/warehouses", {name})) loadWarehouses();
+};
+document.getElementById("add-st").onclick = async () => {
+  const warehouseId = document.getElementById("st-wh").value.trim();
+  const km = parseFloat(document.getElementById("st-km").value);
+  if (!warehouseId || !(km > 0)) return;
+  const payload = {data: {cable: document.getElementById("st-cable").value, segment: document.getElementById("st-seg").value, available_km: km}};
+  if (await post("/api/warehouses/" + encodeURIComponent(warehouseId) + "/stock", payload)) loadWarehouses();
+};
+loadWarehouses();
 </script>
 </body>
 </html>

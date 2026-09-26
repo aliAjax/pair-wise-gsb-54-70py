@@ -12,6 +12,7 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+WAREHOUSE_STOCK_RE = re.compile(r"^/api/warehouses/(\d+)/stock$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +88,9 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/warehouses":
+                    self._send(200, {"items": service.list_warehouses(self._actor())})
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +102,15 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/warehouses":
+                    warehouse = service.create_warehouse(self._actor(), body.get("name", ""))
+                    self._send(201, warehouse)
+                    return
+                match = WAREHOUSE_STOCK_RE.match(parsed.path)
+                if match:
+                    stock = service.add_stock(self._actor(), int(match.group(1)), body.get("data", {}))
+                    self._send(200, stock)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:

@@ -6,7 +6,8 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 
 INITIAL_STATE = "detected"
 CREATE_ROLES = {'noc_operator'}
-ACTION_ROLES = {'approve': {'repair_manager'}, 'mobilize': {'vessel_master'}, 'survey': {'cable_engineer'}, 'splice': {'cable_engineer'}, 'test': {'noc_operator'}, 'restore': {'noc_operator', 'repair_manager'}, 'cancel': {'repair_manager'}}
+STOCK_ROLES = {'warehouse_admin'}
+ACTION_ROLES = {'approve': {'repair_manager'}, 'mobilize': {'vessel_master', 'dispatcher'}, 'survey': {'cable_engineer'}, 'splice': {'cable_engineer'}, 'test': {'noc_operator'}, 'restore': {'noc_operator', 'repair_manager'}, 'cancel': {'repair_manager'}}
 TRANSITIONS = {'approve': {'detected': 'approved'}, 'mobilize': {'approved': 'mobilized'}, 'survey': {'mobilized': 'surveyed'}, 'splice': {'surveyed': 'spliced'}, 'test': {'spliced': 'tested'}, 'restore': {'tested': 'restored'}, 'cancel': {'detected': 'cancelled', 'approved': 'cancelled', 'mobilized': 'cancelled'}}
 
 
@@ -14,7 +15,7 @@ class DomainRules:
     INITIAL_STATE = INITIAL_STATE
 
     def known_role(self, role: str) -> bool:
-        all_roles = set(CREATE_ROLES)
+        all_roles = set(CREATE_ROLES) | set(STOCK_ROLES)
         for roles in ACTION_ROLES.values():
             all_roles.update(roles)
         return role == "admin" or role in all_roles
@@ -24,6 +25,18 @@ class DomainRules:
 
     def role_can_action(self, role: str, action: str) -> bool:
         return role == "admin" or role in ACTION_ROLES.get(action, set())
+
+    def role_can_manage_stock(self, role: str) -> bool:
+        return role == "admin" or role in STOCK_ROLES
+
+    def validate_stock(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        p = dict(payload)
+        cable = text(p, "cable")
+        segment = text(p, "segment")
+        km = number(p, "available_km")
+        if km <= 0:
+            raise ValidationError("available_km必须大于0")
+        return {"cable": cable, "segment": segment, "available_km": round(km, 3)}
 
     def validate_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         p = dict(payload)
@@ -79,9 +92,12 @@ class DomainRules:
                 raise ValidationError("海况窗口不足以完成抢修")
             if float(data.get("available_spare_km", 0)) < float(p["required_spare_km"]):
                 raise ValidationError("船上备缆不足")
+            warehouse_id = integer(data, "warehouse_id", 1)
             changes["weather_window_hours"] = float(data["weather_window_hours"])
             changes["vessel_name"] = text(data, "vessel_name")
-            summary = "抢修船已动员"
+            changes["spare_warehouse_id"] = warehouse_id
+            changes["spare_reserved_km"] = float(p["required_spare_km"])
+            summary = "抢修船已动员，备缆已按所需长度预占"
         elif action == "survey":
             if not boolean(data, "survey_complete"):
                 raise ValidationError("勘察尚未完成")
@@ -117,3 +133,14 @@ class DomainRules:
             summary = "抢修取消"
         p.update(changes)
         return new_state, p, summary or ("已执行%s" % action)
+
+    def plan_stock_effect(self, record: Dict[str, Any], action: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """计算状态动作对应的备缆台账副作用，None表示不涉及备缆。"""
+        payload = record.get("payload", {})
+        if action == "mobilize":
+            return {"type": "reserve", "warehouse_id": int(data["warehouse_id"]), "cable": payload.get("cable", ""), "segment": payload.get("segment", ""), "km": float(payload.get("required_spare_km", 0))}
+        if action == "splice":
+            return {"type": "consume", "used_km": float(data.get("spare_used_km", 0))}
+        if action == "cancel":
+            return {"type": "release"}
+        return None

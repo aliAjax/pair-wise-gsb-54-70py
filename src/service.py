@@ -52,6 +52,11 @@ class Service:
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
+        effect = self.rules.plan_stock_effect(record, action, data or {})
+        tx_hook = None
+        if effect is not None:
+            effect["record_id"] = record_id
+            tx_hook = lambda connection: self.repository.apply_stock_effect(connection, effect)
         return self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
@@ -60,7 +65,30 @@ class Service:
             actor_id=actor.user_id,
             action=action,
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
+            tx_hook=tx_hook,
         )
+
+    def create_warehouse(self, actor: Actor, name: str) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_manage_stock(actor.role):
+            raise PermissionDenied("角色无权管理备缆仓库")
+        name = text({"name": name}, "name")
+        return self.repository.create_warehouse(name, actor.user_id)
+
+    def list_warehouses(self, actor: Actor) -> List[Dict[str, Any]]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.list_warehouses()
+
+    def add_stock(self, actor: Actor, warehouse_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_manage_stock(actor.role):
+            raise PermissionDenied("角色无权管理备缆仓库")
+        self.repository.get_warehouse(int(warehouse_id))
+        stock = self.rules.validate_stock(data or {})
+        return self.repository.upsert_stock(int(warehouse_id), stock["cable"], stock["segment"], stock["available_km"])
 
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
