@@ -14,6 +14,7 @@ class FailureTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.service = build_service(str(Path(self.temp.name) / "test.db"))
+        self.stock = self.service.register_stock(Actor("keeper", "warehouse_keeper"), {"warehouse": "WH-1", "cable": "SEA-1", "segment": "S3", "total_km": 20})
 
     def tearDown(self):
         self.temp.cleanup()
@@ -30,5 +31,7 @@ class FailureTest(unittest.TestCase):
         first = FLOW[0]
         record = self.service.act(Actor("operator", first[1]), record["id"], record["version"], first[0], first[2])
         second = FLOW[1]
+        data = dict(second[2])
+        data["stock_id"] = self.stock["id"]
         with self.assertRaises(Conflict):
-            self.service.act(Actor("operator", second[1]), record["id"], record["version"] - 1, second[0], second[2])
+            self.service.act(Actor("operator", second[1]), record["id"], record["version"] - 1, second[0], data)

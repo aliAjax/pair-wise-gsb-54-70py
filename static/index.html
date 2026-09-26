@@ -10,6 +10,12 @@
     button { padding: .55rem .9rem; cursor: pointer; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
     .row { display: flex; gap: 1rem; align-items: center; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #d5dde5; padding: .45rem .7rem; text-align: left; }
+    th { background: #eef2f6; }
+    td.available { font-weight: 600; color: #0a7a3d; }
+    td.available.low { color: #b3261e; }
+    section { margin-top: 2rem; }
   </style>
 </head>
 <body>
@@ -18,6 +24,16 @@
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
   <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
+  <section>
+    <h2>备缆仓库台账</h2>
+    <div class="row"><button id="loadStock">刷新备缆库存</button></div>
+    <table id="stock">
+      <thead>
+        <tr><th>仓库</th><th>光缆</th><th>区段</th><th>总长度(km)</th><th>已占用(km)</th><th>剩余(km)</th><th>更新人</th><th>更新时间</th></tr>
+      </thead>
+      <tbody><tr><td colspan="8">暂无台账数据</td></tr></tbody>
+    </table>
+  </section>
 </main>
 <script>
 const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
@@ -26,8 +42,34 @@ async function show(path) {
   const data = await response.json();
   document.getElementById("output").textContent = JSON.stringify(data, null, 2);
 }
+async function loadStock() {
+  const response = await fetch("/api/spare-stock", {headers});
+  const data = await response.json();
+  const tbody = document.querySelector("#stock tbody");
+  tbody.innerHTML = "";
+  const items = data.items || [];
+  if (!items.length) {
+    tbody.innerHTML = "<tr><td colspan='8'>暂无台账数据</td></tr>";
+    return;
+  }
+  for (const item of items) {
+    const tr = document.createElement("tr");
+    const cells = [item.warehouse, item.cable, item.segment, item.total_km, item.held_km, item.available_km, item.updated_by, item.updated_at];
+    cells.forEach((value, index) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (index === 5) {
+        td.className = "available" + (Number(value) <= 0 ? " low" : "");
+      }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+}
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("loadStock").onclick = loadStock;
+loadStock();
 </script>
 </body>
 </html>

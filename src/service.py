@@ -2,7 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from .audit import AuditRecorder
-from .domain import Actor, PermissionDenied, text
+from .domain import Actor, PermissionDenied, ValidationError, text
 from .repository import Repository
 from .rules import DomainRules
 
@@ -41,7 +41,22 @@ class Service:
     def get_record(self, actor: Actor, record_id: int) -> Dict[str, Any]:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
-        return self.repository.get(record_id)
+        record = self.repository.get(record_id)
+        record["spare_reservations"] = self.repository.reservations_for_record(record_id)
+        return record
+
+    def _reservation_op(self, action: str, record: Dict[str, Any], data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if action == "mobilize":
+            stock = self.repository.get_stock(int(data["stock_id"]))
+            payload = record["payload"]
+            if stock["cable"] != payload.get("cable") or stock["segment"] != payload.get("segment"):
+                raise ValidationError("所选仓库备缆与故障光缆区段不匹配")
+            return {"kind": "reserve", "stock_id": int(stock["id"]), "reserved_km": float(payload["required_spare_km"])}
+        if action == "splice":
+            return {"kind": "consume", "used_km": float(data["spare_used_km"])}
+        if action == "cancel":
+            return {"kind": "release"}
+        return None
 
     def act(self, actor: Actor, record_id: int, expected_version: int, action: str, data: Dict[str, Any]) -> Dict[str, Any]:
         actor = self._actor(actor)
@@ -52,6 +67,7 @@ class Service:
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
+        reservation_op = self._reservation_op(action, record, data or {})
         return self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
@@ -60,7 +76,29 @@ class Service:
             actor_id=actor.user_id,
             action=action,
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
+            reservation_op=reservation_op,
         )
+
+    def register_stock(self, actor: Actor, payload: Dict[str, Any]) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_manage_stock(actor.role):
+            raise PermissionDenied("角色无权登记备缆台账")
+        prepared = self.rules.validate_stock(payload or {})
+        return self.repository.create_stock(prepared["warehouse"], prepared["cable"], prepared["segment"], float(prepared["total_km"]), actor.user_id)
+
+    def adjust_stock(self, actor: Actor, stock_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_manage_stock(actor.role):
+            raise PermissionDenied("角色无权调整备缆台账")
+        delta = self.rules.validate_stock_adjust(payload or {})
+        return self.repository.adjust_stock(int(stock_id), delta, actor.user_id)
+
+    def list_stock(self, actor: Actor, cable: Optional[str] = None, segment: Optional[str] = None) -> List[Dict[str, Any]]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.list_stock(cable=cable, segment=segment)
 
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)

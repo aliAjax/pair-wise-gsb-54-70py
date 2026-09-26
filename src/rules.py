@@ -6,7 +6,8 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 
 INITIAL_STATE = "detected"
 CREATE_ROLES = {'noc_operator'}
-ACTION_ROLES = {'approve': {'repair_manager'}, 'mobilize': {'vessel_master'}, 'survey': {'cable_engineer'}, 'splice': {'cable_engineer'}, 'test': {'noc_operator'}, 'restore': {'noc_operator', 'repair_manager'}, 'cancel': {'repair_manager'}}
+STOCK_MANAGE_ROLES = {'warehouse_keeper'}
+ACTION_ROLES = {'approve': {'repair_manager'}, 'mobilize': {'vessel_master', 'dispatcher'}, 'survey': {'cable_engineer'}, 'splice': {'cable_engineer'}, 'test': {'noc_operator'}, 'restore': {'noc_operator', 'repair_manager'}, 'cancel': {'repair_manager'}}
 TRANSITIONS = {'approve': {'detected': 'approved'}, 'mobilize': {'approved': 'mobilized'}, 'survey': {'mobilized': 'surveyed'}, 'splice': {'surveyed': 'spliced'}, 'test': {'spliced': 'tested'}, 'restore': {'tested': 'restored'}, 'cancel': {'detected': 'cancelled', 'approved': 'cancelled', 'mobilized': 'cancelled'}}
 
 
@@ -15,12 +16,16 @@ class DomainRules:
 
     def known_role(self, role: str) -> bool:
         all_roles = set(CREATE_ROLES)
+        all_roles.update(STOCK_MANAGE_ROLES)
         for roles in ACTION_ROLES.values():
             all_roles.update(roles)
         return role == "admin" or role in all_roles
 
     def role_can_create(self, role: str) -> bool:
         return role == "admin" or role in CREATE_ROLES
+
+    def role_can_manage_stock(self, role: str) -> bool:
+        return role == "admin" or role in STOCK_MANAGE_ROLES
 
     def role_can_action(self, role: str, action: str) -> bool:
         return role == "admin" or role in ACTION_ROLES.get(action, set())
@@ -49,6 +54,22 @@ class DomainRules:
         p["estimated_repair_hours"] = round(distance / 2.0 + float(p["depth_m"]) / 100.0 + int(p["sea_state"]) * 2.0, 2)
         p["repair_feasible"] = bool(p["vessel_available"] and p["permit_valid"] and p["spare_length_km"] >= p["required_spare_km"] and int(p["sea_state"]) <= 5)
         return p
+
+    def validate_stock(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        p = dict(payload)
+        text(p, "warehouse")
+        text(p, "cable")
+        text(p, "segment")
+        total = number(p, "total_km", 0)
+        if total <= 0:
+            raise ValidationError("total_km必须大于0")
+        return p
+
+    def validate_stock_adjust(self, payload: Dict[str, Any]) -> float:
+        delta = number(dict(payload), "delta_km")
+        if delta == 0:
+            raise ValidationError("delta_km不能为0")
+        return delta
 
     def check_create_conflicts(self, payload: Dict[str, Any], existing: Iterable[Dict[str, Any]]) -> None:
         for item in existing:
@@ -81,6 +102,8 @@ class DomainRules:
                 raise ValidationError("船上备缆不足")
             changes["weather_window_hours"] = float(data["weather_window_hours"])
             changes["vessel_name"] = text(data, "vessel_name")
+            changes["spare_stock_id"] = integer(data, "stock_id", 1)
+            changes["spare_reserved_km"] = float(p["required_spare_km"])
             summary = "抢修船已动员"
         elif action == "survey":
             if not boolean(data, "survey_complete"):

@@ -14,6 +14,7 @@ class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.service = build_service(str(Path(self.temp.name) / "test.db"))
+        self.stock = self.service.register_stock(Actor("keeper", "warehouse_keeper"), {"warehouse": "WH-1", "cable": "SEA-1", "segment": "S3", "total_km": 20})
 
     def tearDown(self):
         self.temp.cleanup()
@@ -22,6 +23,9 @@ class WorkflowTest(unittest.TestCase):
         record = self.service.create(Actor("creator", "noc_operator"), "CABLE-30001", CREATE_DATA)
         self.assertEqual(record["state"], "detected")
         for action, role, data, expected_state in FLOW:
+            data = dict(data)
+            if action == "mobilize":
+                data["stock_id"] = self.stock["id"]
             record = self.service.act(Actor("operator", role), record["id"], record["version"], action, data)
             self.assertEqual(record["state"], expected_state)
         timeline = self.service.timeline(Actor("creator", "noc_operator"), record["id"])

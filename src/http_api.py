@@ -12,6 +12,7 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+STOCK_ACTION_RE = re.compile(r"^/api/spare-stock/(\d+)/actions/([a-z_]+)$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -76,6 +77,11 @@ def make_handler(service: Any, static_dir: Path):
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
                     self._send(200, {"items": records})
                     return
+                if parsed.path == "/api/spare-stock":
+                    query = parse_qs(parsed.query)
+                    items = service.list_stock(self._actor(), cable=query.get("cable", [None])[0], segment=query.get("segment", [None])[0])
+                    self._send(200, {"items": items})
+                    return
                 match = RECORD_RE.match(parsed.path)
                 if match:
                     self._send(200, service.get_record(self._actor(), int(match.group(1))))
@@ -98,6 +104,18 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/spare-stock":
+                    stock = service.register_stock(self._actor(), body)
+                    self._send(201, stock)
+                    return
+                match = STOCK_ACTION_RE.match(parsed.path)
+                if match:
+                    if match.group(2) != "adjust":
+                        self._send(404, {"error": "not_found", "message": "路径不存在"})
+                        return
+                    stock = service.adjust_stock(self._actor(), int(match.group(1)), body)
+                    self._send(200, stock)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
